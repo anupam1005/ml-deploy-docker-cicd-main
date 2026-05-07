@@ -10,40 +10,60 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='../static')
 
-# Path to the model
-MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', 'model.pkl')
+# Path to the model - Use /tmp on Vercel as it's the only writable directory
+if os.environ.get('VERCEL'):
+    MODEL_PATH = '/tmp/model.pkl'
+else:
+    MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', 'model.pkl')
 
 def train_if_missing():
     if not os.path.exists(MODEL_PATH):
-        logger.info("Model not found. Training a new model...")
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.datasets import load_iris
-        X, y = load_iris(return_X_y=True)
-        model = LogisticRegression(max_iter=200)
-        model.fit(X, y)
-        with open(MODEL_PATH, "wb") as f:
-            pickle.dump(model, f)
-        logger.info("Model trained and saved.")
-        return model
+        try:
+            logger.info("Model not found. Training a new model...")
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.datasets import load_iris
+            X, y = load_iris(return_X_y=True)
+            model = LogisticRegression(max_iter=200)
+            model.fit(X, y)
+            with open(MODEL_PATH, "wb") as f:
+                pickle.dump(model, f)
+            logger.info("Model trained and saved to " + MODEL_PATH)
+            return model
+        except Exception as e:
+            logger.error(f"Training failed: {str(e)}")
+            # Fallback: return the trained model without saving to disk if write fails
+            return model 
     return None
 
 def load_model():
-    model = train_if_missing()
-    if model:
-        return model
-        
-    if os.path.exists(MODEL_PATH):
-        with open(MODEL_PATH, "rb") as f:
-            return pickle.load(f)
-    else:
-        logger.error("Failed to load or train model.")
-        return None
+    try:
+        model = train_if_missing()
+        if model:
+            return model
+            
+        if os.path.exists(MODEL_PATH):
+            with open(MODEL_PATH, "rb") as f:
+                return pickle.load(f)
+    except Exception as e:
+        logger.error(f"Model loading error: {str(e)}")
+    
+    # Final fallback: train in memory
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.datasets import load_iris
+    X, y = load_iris(return_X_y=True)
+    model = LogisticRegression(max_iter=200)
+    model.fit(X, y)
+    return model
 
 model = load_model()
 
 @app.route("/")
 def home():
-    return send_from_directory(app.static_folder, 'index.html')
+    try:
+        return send_from_directory(app.static_folder, 'index.html')
+    except Exception as e:
+        logger.error(f"Static file error: {str(e)}")
+        return f"Static files not found. Error: {str(e)}", 404
 
 @app.route("/<path:path>")
 def static_files(path):
